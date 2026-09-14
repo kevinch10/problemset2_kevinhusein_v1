@@ -24,6 +24,8 @@ import {
   formatMonth,
 } from '../utils/calculations';
 import { PriceTrendChart } from './PriceTrendChart';
+import { DataStateMessage, DataStatus } from './DataStateMessage';
+import { HdbFetchError } from '../services/hdbApi';
 
 interface ExplorePricesProps {
   transactions: HDBTransaction[];
@@ -32,6 +34,10 @@ interface ExplorePricesProps {
   onTownChange: (town: string) => void;
   onFlatTypeChange: (flatType: string) => void;
   onSelectTransaction: (tx: HDBTransaction) => void;
+  dataStatus?: DataStatus;
+  fetchError?: HdbFetchError | null;
+  onRetry?: () => void;
+  onResetFilters?: () => void;
 }
 
 export const ExplorePrices: React.FC<ExplorePricesProps> = ({
@@ -41,6 +47,10 @@ export const ExplorePrices: React.FC<ExplorePricesProps> = ({
   onTownChange,
   onFlatTypeChange,
   onSelectTransaction,
+  dataStatus = 'success',
+  fetchError = null,
+  onRetry,
+  onResetFilters,
 }) => {
   const [selectedYear, setSelectedYear] = useState<string>('ALL');
   const [sortBy, setSortBy] = useState<
@@ -231,8 +241,42 @@ export const ExplorePrices: React.FC<ExplorePricesProps> = ({
         </div>
       </section>
 
-      {/* Key Summary Information - 4 Metrics */}
-      <section aria-label="Key Summary Information">
+      {/* Upstream Status Messages: Loading, Refused, Unreachable, or Empty */}
+      {dataStatus === 'loading' && (
+        <DataStateMessage status="loading" />
+      )}
+
+      {dataStatus === 'refused' && (
+        <DataStateMessage
+          status="refused"
+          error={fetchError}
+          onRetry={onRetry}
+        />
+      )}
+
+      {dataStatus === 'unreachable' && (
+        <DataStateMessage
+          status="unreachable"
+          error={fetchError}
+          onRetry={onRetry}
+        />
+      )}
+
+      {(dataStatus === 'empty' || (dataStatus === 'success' && transactionCount === 0)) && (
+        <DataStateMessage
+          status="empty"
+          onResetFilters={onResetFilters}
+        />
+      )}
+
+      {/* When loading with no records or during error states with no records, pause rendering empty charts */}
+      {((dataStatus === 'loading' && transactionCount === 0) ||
+        dataStatus === 'refused' ||
+        dataStatus === 'unreachable' ||
+        transactionCount === 0) ? null : (
+        <>
+          {/* Key Summary Information - 4 Metrics */}
+          <section aria-label="Key Summary Information">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">
             Key Summary Information
@@ -486,6 +530,8 @@ export const ExplorePrices: React.FC<ExplorePricesProps> = ({
           </div>
         )}
       </section>
+        </>
+      )}
     </div>
   );
 };

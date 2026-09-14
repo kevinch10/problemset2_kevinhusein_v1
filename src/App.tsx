@@ -1,18 +1,81 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Screen, HDBTransaction } from './types';
-import { HDB_TRANSACTIONS } from './data/hdbData';
 import { Navbar } from './components/Navbar';
 import { ExplorePrices } from './components/ExplorePrices';
 import { CompareTowns } from './components/CompareTowns';
 import { TransactionDetail } from './components/TransactionDetail';
+import { fetchLiveTransactions, HdbFetchError } from './services/hdbApi';
+import { DataStatus } from './components/DataStateMessage';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('explore');
-  const [selectedTown, setSelectedTown] = useState<string>('ALL');
-  const [selectedFlatType, setSelectedFlatType] = useState<string>('ALL');
-  const [selectedTransaction, setSelectedTransaction] = useState<HDBTransaction | null>(
-    HDB_TRANSACTIONS[0] // Pre-select first transaction so detail view is immediately available
-  );
+  const [selectedTown, setSelectedTown] = useState<string>('TAMPINES');
+  const [selectedFlatType, setSelectedFlatType] = useState<string>('4 ROOM');
+  const [selectedTransaction, setSelectedTransaction] = useState<HDBTransaction | null>(null);
+
+  const [transactions, setTransactions] = useState<HDBTransaction[]>([]);
+  const [allTransactionsPool, setAllTransactionsPool] = useState<HDBTransaction[]>([]);
+  const [dataStatus, setDataStatus] = useState<DataStatus>('loading');
+  const [fetchError, setFetchError] = useState<HdbFetchError | null>(null);
+
+  // Fetch live data for Explore Prices screen from /api/hdb
+  const loadData = useCallback(async (town: string, flatType: string) => {
+    setDataStatus('loading');
+    setFetchError(null);
+    try {
+      const res = await fetchLiveTransactions(town, flatType);
+      if (res.transactions.length === 0) {
+        setDataStatus('empty');
+        setTransactions([]);
+      } else {
+        setTransactions(res.transactions);
+        setDataStatus('success');
+
+        // Pre-select first transaction for TransactionDetail view
+        setSelectedTransaction((prev) => {
+          if (!prev) return res.transactions[0] || null;
+          const stillExists = res.transactions.find((t) => t.id === prev.id);
+          return stillExists || res.transactions[0] || null;
+        });
+
+        // Accumulate in transaction pool for CompareTowns and TransactionDetail
+        setAllTransactionsPool((prev) => {
+          const existingIds = new Set(prev.map((t) => t.id));
+          const newItems = res.transactions.filter((t) => !existingIds.has(t.id));
+          return [...prev, ...newItems];
+        });
+      }
+    } catch (err: any) {
+      setFetchError(err);
+      if (err?.type === 'unreachable') {
+        setDataStatus('unreachable');
+      } else if (err?.type === 'refused') {
+        setDataStatus('refused');
+      } else {
+        setDataStatus('refused');
+      }
+    }
+  }, []);
+
+  // Initial and reactive load whenever town or flat type changes
+  useEffect(() => {
+    loadData(selectedTown, selectedFlatType);
+  }, [selectedTown, selectedFlatType, loadData]);
+
+  // Pre-load common comparison town (PUNGGOL) in background so CompareTowns is ready
+  useEffect(() => {
+    fetchLiveTransactions('PUNGGOL', '4 ROOM')
+      .then((res) => {
+        setAllTransactionsPool((prev) => {
+          const existingIds = new Set(prev.map((t) => t.id));
+          const newItems = res.transactions.filter((t) => !existingIds.has(t.id));
+          return [...prev, ...newItems];
+        });
+      })
+      .catch(() => {
+        // background prefetch failure is non-blocking
+      });
+  }, []);
 
   const handleSelectTransaction = (tx: HDBTransaction) => {
     setSelectedTransaction(tx);
@@ -24,6 +87,15 @@ export default function App() {
     setSelectedTown(town);
     setCurrentScreen('explore');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleRetry = () => {
+    loadData(selectedTown, selectedFlatType);
+  };
+
+  const handleResetFilters = () => {
+    setSelectedTown('TAMPINES');
+    setSelectedFlatType('4 ROOM');
   };
 
   return (
@@ -42,18 +114,22 @@ export default function App() {
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {currentScreen === 'explore' && (
           <ExplorePrices
-            transactions={HDB_TRANSACTIONS}
+            transactions={transactions}
             selectedTown={selectedTown}
             selectedFlatType={selectedFlatType}
             onTownChange={setSelectedTown}
             onFlatTypeChange={setSelectedFlatType}
             onSelectTransaction={handleSelectTransaction}
+            dataStatus={dataStatus}
+            fetchError={fetchError}
+            onRetry={handleRetry}
+            onResetFilters={handleResetFilters}
           />
         )}
 
         {currentScreen === 'compare' && (
           <CompareTowns
-            transactions={HDB_TRANSACTIONS}
+            transactions={allTransactionsPool.length > 0 ? allTransactionsPool : transactions}
             onExploreTown={handleExploreTownFromCompare}
           />
         )}
@@ -61,7 +137,7 @@ export default function App() {
         {currentScreen === 'detail' && selectedTransaction && (
           <TransactionDetail
             transaction={selectedTransaction}
-            allTransactions={HDB_TRANSACTIONS}
+            allTransactions={allTransactionsPool.length > 0 ? allTransactionsPool : transactions}
             onBack={() => {
               setCurrentScreen('explore');
               window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -71,17 +147,26 @@ export default function App() {
         )}
       </main>
 
-      {/* Clean Footer */}
+      {/* Clean Footer with data.gov.sg credit */}
       <footer className="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-500">
         <div className="max-w-6xl mx-auto px-4 space-y-1.5">
           <p className="font-semibold text-slate-700">
             HDB Resale Price Explorer — Singapore Homebuyer & Renter Guide
           </p>
-          <p>
-            MGMT 6110 Human-AI Collaboration at SMU • Individual Problem Set 1
+          <p className="text-slate-600">
+            Data sourced directly from{' '}
+            <a
+              href="https://data.gov.sg/datasets/d_8b84c4ee58e3cfc0ece0d773c8ca6abc/view"
+              target="_blank"
+              rel="noreferrer"
+              className="font-semibold text-slate-800 underline hover:text-slate-950 transition-colors"
+            >
+              data.gov.sg
+            </a>{' '}
+            (Housing & Development Board Resale Flat Prices dataset).
           </p>
           <p className="text-slate-400 text-[11px]">
-            Invented data strictly modeled for educational comparison purposes.
+            MGMT 6110 Human-AI Collaboration at SMU • Individual Problem Set 1
           </p>
         </div>
       </footer>
